@@ -27,6 +27,7 @@ jobs:
     outputs:
       servers: ${{ steps.set-servers.outputs.servers }}
       clients: ${{ steps.set-clients.outputs.clients }}
+      versions: ${{ steps.set-versions.outputs.versions }}
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-python@v1
@@ -44,6 +45,18 @@ jobs:
           CLIENTS=$(jq -c 'with_entries(select(.value.role == "client" or .value.role == "both")) | keys_unsorted' implementations.json)
           echo $CLIENTS
           echo "::set-output name=clients::$CLIENTS"
+      - name: Install moreutils # sponge is needed for the set-versions step
+        run: |
+          sudo apt-get install -y moreutils
+      - name: Get Docker image versions
+        id: set-versions
+        env:
+          DOCKER_CLI_EXPERIMENTAL: enabled # needed for docker manifest inspect
+        run: |
+          VERSIONS=$(.github/workflows/versions.sh)
+          echo $VERSIONS | jq '.'
+          VERSIONS_C=$(echo $VERSIONS | jq -c '.')
+          echo "::set-output name=versions::$VERSIONS_C"
   tests:
     needs: [ wireshark, matrix ]
     runs-on: ubuntu-latest
@@ -56,6 +69,28 @@ jobs:
     name: (${{ matrix.server }} - ${{ matrix.client }})
     steps:
       - uses: actions/checkout@v2
+      - name: Extract for network simulator
+        run: |
+          echo ${{ fromJson(needs.matrix.outputs.versions).quic-network-simulator.url }}
+          echo ${{ fromJson(needs.matrix.outputs.versions).quic-network-simulator.hash }}
+      - name: Extract for server
+        run: |
+          SERVER=${{ matrix.server }}
+          echo $SERVER
+          echo ${{ fromJson(needs.matrix.outputs.versions).${SERVER}.url }}
+          echo ${{ fromJson(needs.matrix.outputs.versions).${SERVER}.hash }}
+      - name: Pull server Docker image
+        run: |
+          URL=$(echo '${{ needs.matrix.outputs.versions }}' | jq -r ".[\"${{ matrix.server }}\"].url")
+          HASH=$(echo '${{ needs.matrix.outputs.versions }}' | jq -r ".[\"${{ matrix.server }}\"].hash")
+          echo "Pulling $URL@$HASH"
+          docker pull "$URL"@"$HASH"
+      - name: Pull client Docker image
+        run: |
+          URL=$(echo '${{ needs.matrix.outputs.versions }}' | jq -r ".[\"${{ matrix.client }}\"].url")
+          HASH=$(echo '${{ needs.matrix.outputs.versions }}' | jq -r ".[\"${{ matrix.client }}\"].hash")
+          echo "Pulling $URL@$HASH"
+          docker pull "$URL"@"$HASH"
       # - uses: actions/setup-python@v1
       #   with:
       #     python-version: 3.8

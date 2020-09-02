@@ -1,7 +1,5 @@
 name: interop
-on:
-  schedule:
-  - cron: "0 */8 * * *" # every 8h
+on: [push]
 
 jobs:
   wireshark:
@@ -11,149 +9,131 @@ jobs:
         with:
           repository: wireshark/wireshark
       - name: Install dependencies
+        run: sudo apt-get install -y cmake libglib2.0-dev libc-ares-dev libgcrypt20-dev flex bison byacc libpcap-dev ninja-build
+      - name: Download and unpack Wireshark
         run: |
-          sudo tools/debian-setup.sh --install-deb-deps --install-optional
-      - name: Build packages
+          mkdir wireshark && cd wireshark
+          wget https://www.wireshark.org/download/src/wireshark-latest.tar.xz
+          tar -xf wireshark-latest.tar.xz --strip 1
+      - name: Build Wireshark
         run: |
-          dpkg-buildpackage
-          mkdir packages
-          mv ../*.deb packages
+          cd wireshark
+          cmake -GNinja -DBUILD_wireshark=0 -DBUILD_sdjournal=0 -DBUILD_sshdump=0 -DBUILD_ciscodump=0 -DENABLE_STATIC=1 -DUSE_STATIC=1 -DENABLE_PLUGINS=0 .
+          ninja
+      - name: Compress
+        run: tar -czvf tshark.tar.gz -C wireshark/run/ tshark
       - name: Upload packages
         uses: actions/upload-artifact@v2
         with:
           name: wireshark
-          path: packages
-  matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      servers: ${{ steps.set-servers.outputs.servers }}
-      clients: ${{ steps.set-clients.outputs.clients }}
-      images: ${{ steps.set-images.outputs.images }}
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v1
-        with:
-          python-version: 3.8
-      - name: Determine servers
-        id: set-servers
-        run: |
-          SERVERS=$(jq -c 'with_entries(select(.value.role == "server" or .value.role == "both")) | keys_unsorted' implementations.json)
-          echo $SERVERS
-          echo "::set-output name=servers::$SERVERS"
-      - name: Determine clients
-        id: set-clients
-        run: |
-          CLIENTS=$(jq -c 'with_entries(select(.value.role == "client" or .value.role == "both")) | keys_unsorted' implementations.json)
-          echo $CLIENTS
-          echo "::set-output name=clients::$CLIENTS"
-      - name: Determine Docker images
-        id: set-images
-        run: |
-          IMAGES=$(jq -c 'keys_unsorted' implementations.json)
-          echo $IMAGES
-          echo "::set-output name=images::$IMAGES"
-  docker-pull-tools:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        image: [ 'quic-network-simulator', 'quic-interop-iperf-endpoint' ]
-    steps:
-    - uses: actions/checkout@v2
-    - name: Pull
-      run: |
-        URL="martenseemann/${{ matrix.image }}"
-        docker pull $URL
-        echo "::set-env name=URL::$URL"
-    - name: Docker inspect
-      run: docker image inspect $URL
-    - name: Save Docker image
-      run: |
-        docker save $URL | gzip --best > ${{ matrix.image }}.tar.gz
-        du -sh ${{ matrix.image }}.tar.gz
-    - name: Upload result
-      uses: actions/upload-artifact@v2
-      with:
-        name: images-tools
-        path: ${{ matrix.image }}.tar.gz
-        if-no-files-found: error
-  docker-pull-images:
-    needs: [ matrix ]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        image: ${{ fromJson(needs.matrix.outputs.images) }}
-    name: Pull ${{ matrix.image }}
-    steps:
-      - uses: actions/checkout@v2
-      - name: Run docker pull
-        run: |
-          URL=$(jq -r '.["${{ matrix.image }}"].url' implementations.json)
-          echo $URL
-          docker pull $URL
-          echo "::set-env name=URL::$URL"
-      - name: Docker inspect
-        run: docker image inspect $URL
-      - name: Save Docker image
-        run: |
-          docker save $URL | gzip --best > ${{ matrix.image }}.tar.gz
-          du -sh ${{ matrix.image }}.tar.gz
-      - name: Upload result
-        uses: actions/upload-artifact@v2
-        with:
-          name: image-${{ matrix.image }}
-          path: ${{ matrix.image }}.tar.gz
-          if-no-files-found: error
+          path: tshark.tar.gz
+  # matrix:
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     servers: ${{ steps.set-servers.outputs.servers }}
+  #     clients: ${{ steps.set-clients.outputs.clients }}
+  #     images: ${{ steps.set-images.outputs.images }}
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: actions/setup-python@v1
+  #       with:
+  #         python-version: 3.8
+  #     - name: Determine servers
+  #       id: set-servers
+  #       run: |
+  #         SERVERS=$(jq -c 'with_entries(select(.value.role == "server" or .value.role == "both")) | keys_unsorted' implementations.json)
+  #         echo $SERVERS
+  #         echo "::set-output name=servers::$SERVERS"
+  #     - name: Determine clients
+  #       id: set-clients
+  #       run: |
+  #         CLIENTS=$(jq -c 'with_entries(select(.value.role == "client" or .value.role == "both")) | keys_unsorted' implementations.json)
+  #         echo $CLIENTS
+  #         echo "::set-output name=clients::$CLIENTS"
+  #     - name: Determine Docker images
+  #       id: set-images
+  #       run: |
+  #         IMAGES=$(jq -c 'keys_unsorted' implementations.json)
+  #         echo $IMAGES
+  #         echo "::set-output name=images::$IMAGES"
+  # docker-pull-tools:
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     matrix:
+  #       image: [ 'quic-network-simulator', 'quic-interop-iperf-endpoint' ]
+  #   steps:
+  #   - uses: actions/checkout@v2
+  #   - name: Pull
+  #     run: |
+  #       URL="martenseemann/${{ matrix.image }}"
+  #       docker pull $URL
+  #       echo "::set-env name=URL::$URL"
+  #   - name: Docker inspect
+  #     run: docker image inspect $URL
+  #   - name: Save Docker image
+  #     run: |
+  #       docker save $URL | gzip --best > ${{ matrix.image }}.tar.gz
+  #       du -sh ${{ matrix.image }}.tar.gz
+  #   - name: Upload result
+  #     uses: actions/upload-artifact@v2
+  #     with:
+  #       name: images-tools
+  #       path: ${{ matrix.image }}.tar.gz
+  #       if-no-files-found: error
+  # docker-pull-images:
+  #   needs: [ matrix ]
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     matrix:
+  #       image: ${{ fromJson(needs.matrix.outputs.images) }}
+  #   name: Pull ${{ matrix.image }}
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - name: Run docker pull
+  #       run: |
+  #         URL=$(jq -r '.["${{ matrix.image }}"].url' implementations.json)
+  #         echo $URL
+  #         docker pull $URL
+  #         echo "::set-env name=URL::$URL"
+  #     - name: Docker inspect
+  #       run: docker image inspect $URL
+  #     - name: Save Docker image
+  #       run: |
+  #         docker save $URL | gzip --best > ${{ matrix.image }}.tar.gz
+  #         du -sh ${{ matrix.image }}.tar.gz
+  #     - name: Upload result
+  #       uses: actions/upload-artifact@v2
+  #       with:
+  #         name: image-${{ matrix.image }}
+  #         path: ${{ matrix.image }}.tar.gz
+  #         if-no-files-found: error
   tests:
-    needs: [ wireshark, matrix, docker-pull-tools, docker-pull-images ]
+    needs: [ wireshark ]
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix: 
-        server: ${{ fromJson(needs.matrix.outputs.servers) }}
-        client: ${{ fromJson(needs.matrix.outputs.clients) }}
-    name: (${{ matrix.server }} - ${{ matrix.client }})
+        server: [ quic-go ]
+        client: [ quic-go ]
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-python@v1
         with:
           python-version: 3.8
-      - run: docker image ls
-      - name: Download tools Docker images
-        uses: actions/download-artifact@v2
-        with:
-          name: images-tools
-      - name: Download ${{ matrix.server }} Docker image
-        uses: actions/download-artifact@v2
-        with:
-          name: image-${{ matrix.server }}
-      - name: Download ${{ matrix.client }} Docker image
-        if: ${{ matrix.server != matrix.client }}
-        uses: actions/download-artifact@v2
-        with:
-          name: image-${{ matrix.client }}
-      - name: Load docker images
-        run: |
-          docker load --input quic-network-simulator.tar.gz
-          docker load --input quic-interop-iperf-endpoint.tar.gz
-          docker load --input ${{ matrix.server }}.tar.gz
-          docker load --input ${{ matrix.client }}.tar.gz
-      - run: docker image ls
       - name: Download Wireshark
         uses: actions/download-artifact@v2
         with:
           name: wireshark
-          path: packages
+          path: wireshark
       - name: Install Wireshark
         run: |
-          sudo dpkg -i \
-            packages/libwireshark-data_*.deb \
-            packages/libwireshark0_*.deb \
-            packages/libwiretap0_*.deb \
-            packages/libwsutil0_*.deb \
-            packages/tshark_*.deb \
-            packages/wireshark-common_*.deb || true
-          sudo apt-get -f install
+          cd wireshark
+          tar xfz tshark.tar.gz
+          ls -al
+          sudo mv tshark /usr/local/bin
+          cd .. && rm -r wireshark
+      - run: tshark -v
       - name: Install Python packages
         run: |
           pip install -U pip
@@ -174,54 +154,54 @@ jobs:
           find logs_measurement -depth -name "client" -type d -exec rm -r "{}" \;
           find logs_measurement -depth -name "server" -type d -exec rm -r "{}" \;
           mv logs_measurement/${{ matrix.server }}_${{ matrix.client }}/* logs/${{ matrix.server }}_${{ matrix.client }}/
-      - name: Upload logs
-        if: ${{ github.event_name == "schedule" }}
-        uses: appleboy/scp-action@master
-        with:
-          host: interop.seemann.io
-          username: ${{ secrets.INTEROP_SEEMANN_IO_USER }}
-          key: ${{ secrets.INTEROP_SEEMANN_IO_SSH_KEY }}
-          source: logs/${{ matrix.server }}_${{ matrix.client }}
-          target: /root/src/quic-interop-runner/web/${{ github.run_id }}
-          strip_components: 1
-      - name: Upload result
-        uses: actions/upload-artifact@v2
-        with:
-          name: results
-          path: |
-            ${{ matrix.server }}_${{ matrix.client }}_results.json
-            ${{ matrix.server }}_${{ matrix.client }}_measurements.json
-  aggregate:
-    needs: [ matrix, tests ]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v1
-        with:
-          python-version: 3.8
-      - name: Download results
-        uses: actions/download-artifact@v2
-        with:
-          name: results
-      - name: Aggregate results
-        run: python .github/workflows/aggregate.py --server ${{ join(fromJson(needs.matrix.outputs.servers), ',') }} --client ${{ join(fromJson(needs.matrix.outputs.clients), ',') }} --log-dir=${{ github.run_id }} --output result.json
-      - name: Upload result
-        if: ${{ github.event_name == "schedule" }}
-        uses: appleboy/scp-action@master
-        with:
-          host: interop.seemann.io
-          username: ${{ secrets.INTEROP_SEEMANN_IO_USER }}
-          key: ${{ secrets.INTEROP_SEEMANN_IO_SSH_KEY }}
-          source: result.json
-          target: /root/src/quic-interop-runner/web/${{ github.run_id }}
-      - name: Publish result
-        if: ${{ github.event_name == "schedule" }}
-        uses: appleboy/ssh-action@master
-        with:
-          host: interop.seemann.io
-          username: ${{ secrets.INTEROP_SEEMANN_IO_USER }}
-          key: ${{ secrets.INTEROP_SEEMANN_IO_SSH_KEY }}
-          script: |
-            cd /root/src/quic-interop-runner/web/
-            jq '. += [ "${{ github.run_id }}" ]' logs.json | sponge logs.json
-            rm latest && ln -s ${{ github.run_id }} latest
+      # - name: Upload logs
+      #   if: ${{ github.event_name == "schedule" }}
+      #   uses: appleboy/scp-action@master
+      #   with:
+      #     host: interop.seemann.io
+      #     username: ${{ secrets.INTEROP_SEEMANN_IO_USER }}
+      #     key: ${{ secrets.INTEROP_SEEMANN_IO_SSH_KEY }}
+      #     source: logs/${{ matrix.server }}_${{ matrix.client }}
+      #     target: /root/src/quic-interop-runner/web/${{ github.run_id }}
+      #     strip_components: 1
+      # - name: Upload result
+      #   uses: actions/upload-artifact@v2
+      #   with:
+      #     name: results
+      #     path: |
+      #       ${{ matrix.server }}_${{ matrix.client }}_results.json
+      #       ${{ matrix.server }}_${{ matrix.client }}_measurements.json
+  # aggregate:
+  #   needs: [ matrix, tests ]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: actions/setup-python@v1
+  #       with:
+  #         python-version: 3.8
+  #     - name: Download results
+  #       uses: actions/download-artifact@v2
+  #       with:
+  #         name: results
+  #     - name: Aggregate results
+  #       run: python .github/workflows/aggregate.py --server ${{ join(fromJson(needs.matrix.outputs.servers), ',') }} --client ${{ join(fromJson(needs.matrix.outputs.clients), ',') }} --log-dir=${{ github.run_id }} --output result.json
+  #     - name: Upload result
+  #       if: ${{ github.event_name == "schedule" }}
+  #       uses: appleboy/scp-action@master
+  #       with:
+  #         host: interop.seemann.io
+  #         username: ${{ secrets.INTEROP_SEEMANN_IO_USER }}
+  #         key: ${{ secrets.INTEROP_SEEMANN_IO_SSH_KEY }}
+  #         source: result.json
+  #         target: /root/src/quic-interop-runner/web/${{ github.run_id }}
+  #     - name: Publish result
+  #       if: ${{ github.event_name == "schedule" }}
+  #       uses: appleboy/ssh-action@master
+  #       with:
+  #         host: interop.seemann.io
+  #         username: ${{ secrets.INTEROP_SEEMANN_IO_USER }}
+  #         key: ${{ secrets.INTEROP_SEEMANN_IO_SSH_KEY }}
+  #         script: |
+  #           cd /root/src/quic-interop-runner/web/
+  #           jq '. += [ "${{ github.run_id }}" ]' logs.json | sponge logs.json
+  #           rm latest && ln -s ${{ github.run_id }} latest
